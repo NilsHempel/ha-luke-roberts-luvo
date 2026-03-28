@@ -58,9 +58,19 @@ class LuvoCoordinator(DataUpdateCoordinator):
     async def _connect(self) -> BleakClient:
         """Establish a BLE connection."""
         ble_device = self._get_ble_device()
-        return await establish_connection(
+        client = await establish_connection(
             BleakClient, ble_device, ble_device.address
         )
+        # Log all discovered services and characteristics for debugging
+        for service in client.services:
+            _LOGGER.debug("BLE Service: %s", service.uuid)
+            for char in service.characteristics:
+                _LOGGER.debug(
+                    "  Characteristic: %s (properties: %s)",
+                    char.uuid,
+                    char.properties,
+                )
+        return client
 
     async def _enumerate_scenes(self, client: BleakClient) -> None:
         """Enumerate all scenes stored on the lamp via notification protocol."""
@@ -121,6 +131,27 @@ class LuvoCoordinator(DataUpdateCoordinator):
 
         _LOGGER.info("Enumerated %d scenes: %s", len(self._scenes), list(self._scenes.keys()))
 
+    def _build_service_dump(self, client: BleakClient) -> str:
+        """Build a human-readable dump of all BLE services/characteristics."""
+        lines = []
+        for service in client.services:
+            lines.append(f"Service: {service.uuid}")
+            for char in service.characteristics:
+                lines.append(f"  Char: {char.uuid} ({', '.join(char.properties)})")
+        return "\n".join(lines) if lines else "No services discovered"
+
+    async def _notify_diagnostic(self, message: str) -> None:
+        """Create a persistent notification with diagnostic info."""
+        await self.hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "Luvo BLE Diagnostic",
+                "message": message,
+                "notification_id": "luvo_ble_diagnostic",
+            },
+        )
+
     async def _async_update_data(self) -> dict:
         """Poll the lamp for current state."""
         async with self._lock:
@@ -130,6 +161,36 @@ class LuvoCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"Could not connect to Luvo: {err}") from err
 
             try:
+                # Diagnostic: dump all services and check for required characteristics
+                service_dump = self._build_service_dump(client)
+                _LOGGER.info("Luvo BLE services:\n%s", service_dump)
+
+                api_char = None
+                scene_char = None
+                try:
+                    api_char = client.services.get_characteristic(API_UUID)
+                except Exception:
+                    pass
+                try:
+                    scene_char = client.services.get_characteristic(SCENE_UUID)
+                except Exception:
+                    pass
+
+                if not api_char or not scene_char:
+                    diag_msg = (
+                        f"**Required characteristics not found!**\n\n"
+                        f"- API (`{API_UUID}`): {'FOUND' if api_char else 'MISSING'}\n"
+                        f"- Scene (`{SCENE_UUID}`): {'FOUND' if scene_char else 'MISSING'}\n\n"
+                        f"**Discovered services:**\n```\n{service_dump}\n```"
+                    )
+                    await self._notify_diagnostic(diag_msg)
+                    raise UpdateFailed(
+                        f"Required characteristics not found. "
+                        f"API ({API_UUID}): {'found' if api_char else 'MISSING'}, "
+                        f"Scene ({SCENE_UUID}): {'found' if scene_char else 'MISSING'}. "
+                        f"Services dump sent to persistent notification."
+                    )
+
                 if not self._scenes_loaded:
                     await self._enumerate_scenes(client)
                     self._scenes_loaded = True
