@@ -6,6 +6,7 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
+    ATTR_HS_COLOR,
     ColorMode,
     LightEntity,
     LightEntityFeature,
@@ -26,49 +27,62 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Luke Roberts Luvo light."""
+    """Set up Luke Roberts Luvo lights."""
     coordinator: LuvoCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([LuvoLight(coordinator, entry)])
+    async_add_entities([
+        LuvoUplight(coordinator, entry),
+        LuvoDownlight(coordinator, entry),
+    ])
 
 
-class LuvoLight(CoordinatorEntity[LuvoCoordinator], LightEntity):
-    """Light entity for Luke Roberts Luvo."""
+def _device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Shared device info for all entities."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.unique_id)},
+        name=entry.title or "Luke Roberts Luvo",
+        manufacturer=MANUFACTURER,
+        model=MODEL,
+        connections={(dr.CONNECTION_BLUETOOTH, entry.unique_id)},
+    )
+
+
+class LuvoUplight(CoordinatorEntity[LuvoCoordinator], LightEntity):
+    """Uplight entity (RGB/HS color + brightness + scenes)."""
 
     _attr_has_entity_name = True
-    _attr_name = None
-    _attr_supported_color_modes = {ColorMode.COLOR_TEMP}
-    _attr_color_mode = ColorMode.COLOR_TEMP
+    _attr_name = "Uplight"
+    _attr_supported_color_modes = {ColorMode.HS}
+    _attr_color_mode = ColorMode.HS
     _attr_supported_features = LightEntityFeature.EFFECT
-    _attr_min_color_temp_kelvin = COLOR_TEMP_MIN_KELVIN
-    _attr_max_color_temp_kelvin = COLOR_TEMP_MAX_KELVIN
 
     def __init__(self, coordinator: LuvoCoordinator, entry: ConfigEntry) -> None:
-        """Initialize the light."""
+        """Initialize the uplight."""
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.unique_id}_light"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.unique_id)},
-            name=entry.title or "Luke Roberts Luvo",
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-            connections={(dr.CONNECTION_BLUETOOTH, entry.unique_id)},
-        )
+        self._attr_unique_id = f"{entry.unique_id}_uplight"
+        self._attr_device_info = _device_info(entry)
 
     @property
     def is_on(self) -> bool:
-        """Return true if the light is on."""
+        """Return true if the lamp is on."""
         return self.coordinator.data.get("is_on", False)
 
     @property
     def brightness(self) -> int | None:
-        """Return the brightness (0-255)."""
-        pct = self.coordinator.data.get("brightness", 100)
+        """Return the uplight brightness (0-255)."""
+        pct = self.coordinator.data.get("uplight_brightness", 100)
         return round(pct * 255 / 100)
 
     @property
-    def color_temp_kelvin(self) -> int | None:
-        """Return the color temperature in Kelvin."""
-        return self.coordinator.data.get("color_temp_kelvin")
+    def hs_color(self) -> tuple[float, float] | None:
+        """Return the uplight HS color."""
+        hue_raw = self.coordinator.data.get("uplight_hue", 0)
+        sat_raw = self.coordinator.data.get("uplight_saturation", 0)
+        # Convert from device range to HA range
+        # Device hue: 0-65535 -> HA hue: 0-360
+        # Device sat: 0-255 -> HA sat: 0-100
+        ha_hue = hue_raw * 360 / 65535
+        ha_sat = sat_raw * 100 / 255
+        return (ha_hue, ha_sat)
 
     @property
     def effect_list(self) -> list[str]:
@@ -82,7 +96,7 @@ class LuvoLight(CoordinatorEntity[LuvoCoordinator], LightEntity):
         return self.coordinator.data.get("current_scene_name")
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Turn on the light."""
+        """Turn on the uplight."""
         if ATTR_EFFECT in kwargs:
             scene_name = kwargs[ATTR_EFFECT]
             scenes = self.coordinator.data.get("scenes", {})
@@ -91,19 +105,81 @@ class LuvoLight(CoordinatorEntity[LuvoCoordinator], LightEntity):
                 await self.coordinator.async_set_scene(scene_id)
                 return
 
-        if ATTR_COLOR_TEMP_KELVIN in kwargs:
-            await self.coordinator.async_set_color_temp_kelvin(
-                kwargs[ATTR_COLOR_TEMP_KELVIN]
-            )
+        # Gather current state for defaults
+        hue_raw = self.coordinator.data.get("uplight_hue", 0)
+        sat_raw = self.coordinator.data.get("uplight_saturation", 0)
+        bri_pct = self.coordinator.data.get("uplight_brightness", 100)
+
+        if ATTR_HS_COLOR in kwargs:
+            ha_hue, ha_sat = kwargs[ATTR_HS_COLOR]
+            hue_raw = round(ha_hue * 65535 / 360)
+            sat_raw = round(ha_sat * 255 / 100)
 
         if ATTR_BRIGHTNESS in kwargs:
-            pct = round(kwargs[ATTR_BRIGHTNESS] * 100 / 255)
-            await self.coordinator.async_set_brightness(pct)
+            bri_pct = round(kwargs[ATTR_BRIGHTNESS] * 100 / 255)
+
+        if ATTR_HS_COLOR in kwargs or ATTR_BRIGHTNESS in kwargs:
+            await self.coordinator.async_set_uplight(hue_raw, sat_raw, bri_pct)
             return
 
-        if not kwargs:
-            await self.coordinator.async_turn_on()
+        # Plain turn on with no args -> use default scene
+        await self.coordinator.async_turn_on()
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Turn off the light."""
+        """Turn off the lamp."""
+        await self.coordinator.async_turn_off()
+
+
+class LuvoDownlight(CoordinatorEntity[LuvoCoordinator], LightEntity):
+    """Downlight entity (color temperature + brightness)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Downlight"
+    _attr_supported_color_modes = {ColorMode.COLOR_TEMP}
+    _attr_color_mode = ColorMode.COLOR_TEMP
+    _attr_min_color_temp_kelvin = COLOR_TEMP_MIN_KELVIN
+    _attr_max_color_temp_kelvin = COLOR_TEMP_MAX_KELVIN
+
+    def __init__(self, coordinator: LuvoCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the downlight."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.unique_id}_downlight"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if the lamp is on."""
+        return self.coordinator.data.get("is_on", False)
+
+    @property
+    def brightness(self) -> int | None:
+        """Return the downlight brightness (0-255)."""
+        pct = self.coordinator.data.get("downlight_brightness", 100)
+        return round(pct * 255 / 100)
+
+    @property
+    def color_temp_kelvin(self) -> int | None:
+        """Return the downlight color temperature in Kelvin."""
+        return self.coordinator.data.get("downlight_color_temp")
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Turn on the downlight."""
+        kelvin = self.coordinator.data.get("downlight_color_temp", COLOR_TEMP_MIN_KELVIN)
+        bri_pct = self.coordinator.data.get("downlight_brightness", 100)
+
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
+
+        if ATTR_BRIGHTNESS in kwargs:
+            bri_pct = round(kwargs[ATTR_BRIGHTNESS] * 100 / 255)
+
+        if ATTR_COLOR_TEMP_KELVIN in kwargs or ATTR_BRIGHTNESS in kwargs:
+            await self.coordinator.async_set_downlight(kelvin, bri_pct)
+            return
+
+        # Plain turn on -> use default scene
+        await self.coordinator.async_turn_on()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Turn off the lamp."""
         await self.coordinator.async_turn_off()

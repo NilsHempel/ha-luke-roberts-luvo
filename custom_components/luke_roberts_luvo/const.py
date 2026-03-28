@@ -13,6 +13,15 @@ CMD_SET_SCENE = bytes([0xA0, 0x02, 0x05])
 CMD_SET_BRIGHTNESS = bytes([0xA0, 0x01, 0x03])
 CMD_SET_COLOR_TEMP = bytes([0xA0, 0x01, 0x04])
 
+# Intermediate light command: 0xA0 0x01 0x02 <content_flag> <dur_hi> <dur_lo> ...
+# content_flag 0x01 = uplight (HSB), content_flag 0x02 = downlight (kelvin)
+CMD_INTERMEDIATE = bytes([0xA0, 0x01, 0x02])
+CONTENT_UPLIGHT = 0x01
+CONTENT_DOWNLIGHT = 0x02
+
+# Duration 0x0000 = permanent override (until next scene change)
+DURATION_PERMANENT = bytes([0x00, 0x00])
+
 # Color temperature range (Kelvin) for the downlight
 COLOR_TEMP_MIN_KELVIN = 2700
 COLOR_TEMP_MAX_KELVIN = 4000

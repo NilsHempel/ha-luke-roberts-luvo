@@ -16,12 +16,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     API_UUID,
     CMD_GET_SCENE,
+    CMD_INTERMEDIATE,
     CMD_SET_BRIGHTNESS,
-    CMD_SET_COLOR_TEMP,
     CMD_SET_SCENE,
     COLOR_TEMP_MAX_KELVIN,
     COLOR_TEMP_MIN_KELVIN,
+    CONTENT_DOWNLIGHT,
+    CONTENT_UPLIGHT,
     DOMAIN,
+    DURATION_PERMANENT,
     SCENE_LIST_END,
     SCENE_OFF,
     SCENE_ON_DEFAULT,
@@ -45,10 +48,18 @@ class LuvoCoordinator(DataUpdateCoordinator):
         self._current_scene_id: int | None = None
         self._current_scene_name: str | None = None
         self._brightness: int = 100
-        self._color_temp_kelvin: int = COLOR_TEMP_MIN_KELVIN
         self._is_on: bool = False
         self._scenes_loaded: bool = False
         self._lock = asyncio.Lock()
+
+        # Uplight state (HSB)
+        self._uplight_brightness: int = 100
+        self._uplight_hue: int = 0
+        self._uplight_saturation: int = 0
+
+        # Downlight state (color temp + brightness)
+        self._downlight_brightness: int = 100
+        self._downlight_color_temp: int = COLOR_TEMP_MIN_KELVIN
 
     def _get_ble_device(self):
         """Get the BLE device from HA's bluetooth integration."""
@@ -65,7 +76,6 @@ class LuvoCoordinator(DataUpdateCoordinator):
         client = await establish_connection(
             BleakClient, ble_device, ble_device.address
         )
-        # Log all discovered services and characteristics for debugging
         for service in client.services:
             _LOGGER.debug("BLE Service: %s", service.uuid)
             for char in service.characteristics:
@@ -167,10 +177,14 @@ class LuvoCoordinator(DataUpdateCoordinator):
         return {
             "is_on": self._is_on,
             "brightness": self._brightness,
-            "color_temp_kelvin": self._color_temp_kelvin,
             "current_scene_id": self._current_scene_id,
             "current_scene_name": self._current_scene_name,
             "scenes": dict(self._scenes),
+            "uplight_brightness": self._uplight_brightness,
+            "uplight_hue": self._uplight_hue,
+            "uplight_saturation": self._uplight_saturation,
+            "downlight_brightness": self._downlight_brightness,
+            "downlight_color_temp": self._downlight_color_temp,
         }
 
     async def _send_command(self, command: bytes) -> None:
@@ -192,19 +206,64 @@ class LuvoCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_set_brightness(self, brightness_pct: int) -> None:
-        """Set brightness (0-100)."""
+        """Set overall brightness (0-100)."""
         brightness_pct = max(0, min(100, brightness_pct))
         await self._send_command(CMD_SET_BRIGHTNESS + bytes([brightness_pct]))
         self._brightness = brightness_pct
         await self.async_request_refresh()
 
-    async def async_set_color_temp_kelvin(self, kelvin: int) -> None:
-        """Set downlight color temperature in Kelvin (2700-4000)."""
-        kelvin = max(COLOR_TEMP_MIN_KELVIN, min(COLOR_TEMP_MAX_KELVIN, kelvin))
-        await self._send_command(
-            CMD_SET_COLOR_TEMP + kelvin.to_bytes(2, byteorder="big")
+    async def async_set_uplight(
+        self, hue: int, saturation: int, brightness: int
+    ) -> None:
+        """Set uplight HSB color permanently.
+
+        hue: 0-65535 (maps to 0-360 degrees)
+        saturation: 0-255
+        brightness: 0-100
+        """
+        hue = max(0, min(65535, hue))
+        saturation = max(0, min(255, saturation))
+        brightness = max(0, min(100, brightness))
+        cmd = (
+            CMD_INTERMEDIATE
+            + bytes([CONTENT_UPLIGHT])
+            + DURATION_PERMANENT
+            + bytes([saturation])
+            + hue.to_bytes(2, byteorder="big")
+            + bytes([brightness])
         )
-        self._color_temp_kelvin = kelvin
+        _LOGGER.debug(
+            "Uplight command: hue=%d sat=%d bri=%d -> %s",
+            hue, saturation, brightness, cmd.hex(),
+        )
+        await self._send_command(cmd)
+        self._uplight_hue = hue
+        self._uplight_saturation = saturation
+        self._uplight_brightness = brightness
+        await self.async_request_refresh()
+
+    async def async_set_downlight(self, kelvin: int, brightness: int) -> None:
+        """Set downlight color temperature and brightness permanently.
+
+        kelvin: 2700-4000
+        brightness: 0-100
+        """
+        kelvin = max(COLOR_TEMP_MIN_KELVIN, min(COLOR_TEMP_MAX_KELVIN, kelvin))
+        brightness = max(0, min(100, brightness))
+        cmd = (
+            CMD_INTERMEDIATE
+            + bytes([CONTENT_DOWNLIGHT])
+            + DURATION_PERMANENT
+            + kelvin.to_bytes(2, byteorder="big")
+            + bytes([brightness])
+        )
+        _LOGGER.debug(
+            "Downlight command: kelvin=%d bri=%d -> %s",
+            kelvin, brightness, cmd.hex(),
+        )
+        await self._send_command(cmd)
+        self._downlight_color_temp = kelvin
+        self._downlight_brightness = brightness
         await self.async_request_refresh()
 
     async def async_turn_on(self) -> None:
