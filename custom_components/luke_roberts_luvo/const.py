@@ -11,6 +11,11 @@ SCENE_UUID = "44092844-0567-11e6-b862-0002a5d5c51b"
 CMD_GET_SCENE = bytes([0xA0, 0x01, 0x01])
 CMD_SET_SCENE = bytes([0xA0, 0x02, 0x05])
 CMD_SET_BRIGHTNESS = bytes([0xA0, 0x01, 0x03])
+CMD_SET_COLOR_TEMP = bytes([0xA0, 0x01, 0x04])
+
+# Color temperature range (Kelvin) for the downlight
+COLOR_TEMP_MIN_KELVIN = 2700
+COLOR_TEMP_MAX_KELVIN = 4000
 
 # Special scene IDs
 SCENE_OFF = 0x00

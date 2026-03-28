@@ -17,7 +17,10 @@ from .const import (
     API_UUID,
     CMD_GET_SCENE,
     CMD_SET_BRIGHTNESS,
+    CMD_SET_COLOR_TEMP,
     CMD_SET_SCENE,
+    COLOR_TEMP_MAX_KELVIN,
+    COLOR_TEMP_MIN_KELVIN,
     DOMAIN,
     SCENE_LIST_END,
     SCENE_OFF,
@@ -42,6 +45,7 @@ class LuvoCoordinator(DataUpdateCoordinator):
         self._current_scene_id: int | None = None
         self._current_scene_name: str | None = None
         self._brightness: int = 100
+        self._color_temp_kelvin: int = COLOR_TEMP_MIN_KELVIN
         self._is_on: bool = False
         self._scenes_loaded: bool = False
         self._lock = asyncio.Lock()
@@ -163,6 +167,7 @@ class LuvoCoordinator(DataUpdateCoordinator):
         return {
             "is_on": self._is_on,
             "brightness": self._brightness,
+            "color_temp_kelvin": self._color_temp_kelvin,
             "current_scene_id": self._current_scene_id,
             "current_scene_name": self._current_scene_name,
             "scenes": dict(self._scenes),
@@ -191,6 +196,15 @@ class LuvoCoordinator(DataUpdateCoordinator):
         brightness_pct = max(0, min(100, brightness_pct))
         await self._send_command(CMD_SET_BRIGHTNESS + bytes([brightness_pct]))
         self._brightness = brightness_pct
+        await self.async_request_refresh()
+
+    async def async_set_color_temp_kelvin(self, kelvin: int) -> None:
+        """Set downlight color temperature in Kelvin (2700-4000)."""
+        kelvin = max(COLOR_TEMP_MIN_KELVIN, min(COLOR_TEMP_MAX_KELVIN, kelvin))
+        await self._send_command(
+            CMD_SET_COLOR_TEMP + kelvin.to_bytes(2, byteorder="big")
+        )
+        self._color_temp_kelvin = kelvin
         await self.async_request_refresh()
 
     async def async_turn_on(self) -> None:

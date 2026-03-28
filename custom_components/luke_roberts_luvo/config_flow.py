@@ -17,6 +17,21 @@ from .const import DOMAIN, SERVICE_UUID
 
 _LOGGER = logging.getLogger(__name__)
 
+DEFAULT_NAME = "Luke Roberts Luvo"
+
+
+def _is_mac_address(name: str) -> bool:
+    """Check if a name looks like a MAC address."""
+    parts = name.replace("-", ":").split(":")
+    return len(parts) == 6 and all(len(p) == 2 for p in parts)
+
+
+def _friendly_name(raw_name: str | None) -> str:
+    """Return a friendly name, falling back to default if name is missing or a MAC."""
+    if not raw_name or _is_mac_address(raw_name):
+        return DEFAULT_NAME
+    return raw_name
+
 
 class LuvoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Luke Roberts Luvo."""
@@ -41,11 +56,11 @@ class LuvoConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Confirm Bluetooth discovery."""
         if user_input is not None:
-            title = self._discovery_info.name or "Luke Roberts Luvo"
+            title = _friendly_name(self._discovery_info.name)
             return self.async_create_entry(title=title, data={})
 
         self._set_confirm_only()
-        name = self._discovery_info.name or self._discovery_info.address
+        name = _friendly_name(self._discovery_info.name)
         return self.async_show_form(
             step_id="bluetooth_confirm",
             description_placeholders={"name": name},
@@ -63,10 +78,10 @@ class LuvoConfigFlow(ConfigFlow, domain=DOMAIN):
             # Find the discovery info for the selected device
             for info in async_discovered_service_info(self.hass):
                 if info.address.upper() == address.upper():
-                    title = info.name or "Luke Roberts Luvo"
+                    title = _friendly_name(info.name)
                     return self.async_create_entry(title=title, data={})
 
-            return self.async_create_entry(title="Luke Roberts Luvo", data={})
+            return self.async_create_entry(title=DEFAULT_NAME, data={})
 
         # Scan for available Luvo lamps
         devices: dict[str, str] = {}
