@@ -86,12 +86,12 @@ class LuvoCoordinator(DataUpdateCoordinator):
         await client.start_notify(API_UUID, notification_handler)
 
         try:
-            next_scene_id = 0
-            while next_scene_id != SCENE_LIST_END:
+            queried_id = 0
+            while True:
                 response_event.clear()
                 await client.write_gatt_char(
                     API_UUID,
-                    CMD_GET_SCENE + bytes([next_scene_id]),
+                    CMD_GET_SCENE + bytes([queried_id]),
                     response=True,
                 )
 
@@ -101,7 +101,7 @@ class LuvoCoordinator(DataUpdateCoordinator):
                     )
                 except TimeoutError:
                     _LOGGER.warning(
-                        "Timeout waiting for scene %d response", next_scene_id
+                        "Timeout waiting for scene %d response", queried_id
                     )
                     break
 
@@ -118,39 +118,20 @@ class LuvoCoordinator(DataUpdateCoordinator):
                 scene_name = response_data[3:].decode("utf-8", errors="replace").strip()
 
                 if scene_name:
-                    current_id = next_scene_id if next_scene_id != SCENE_LIST_END else len(self._scenes) + 1
-                    # The scene_id for setting is the index we queried, not the next_id
-                    # We need to track which ID we asked for
-                    self._scenes[scene_name] = len(self._scenes) + 1
+                    self._scenes[scene_name] = queried_id
 
                 _LOGGER.debug(
-                    "Found scene: '%s' (next=%d)", scene_name, next_scene_id
+                    "Found scene: '%s' (id=%d, next=%d)",
+                    scene_name, queried_id, next_scene_id,
                 )
+
+                if next_scene_id == SCENE_LIST_END:
+                    break
+                queried_id = next_scene_id
         finally:
             await client.stop_notify(API_UUID)
 
-        _LOGGER.info("Enumerated %d scenes: %s", len(self._scenes), list(self._scenes.keys()))
-
-    def _build_service_dump(self, client: BleakClient) -> str:
-        """Build a human-readable dump of all BLE services/characteristics."""
-        lines = []
-        for service in client.services:
-            lines.append(f"Service: {service.uuid}")
-            for char in service.characteristics:
-                lines.append(f"  Char: {char.uuid} ({', '.join(char.properties)})")
-        return "\n".join(lines) if lines else "No services discovered"
-
-    async def _notify_diagnostic(self, message: str) -> None:
-        """Create a persistent notification with diagnostic info."""
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": "Luvo BLE Diagnostic",
-                "message": message,
-                "notification_id": "luvo_ble_diagnostic",
-            },
-        )
+        _LOGGER.info("Enumerated %d scenes: %s", len(self._scenes), self._scenes)
 
     async def _async_update_data(self) -> dict:
         """Poll the lamp for current state."""
@@ -161,36 +142,6 @@ class LuvoCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"Could not connect to Luvo: {err}") from err
 
             try:
-                # Diagnostic: dump all services and check for required characteristics
-                service_dump = self._build_service_dump(client)
-                _LOGGER.info("Luvo BLE services:\n%s", service_dump)
-
-                api_char = None
-                scene_char = None
-                try:
-                    api_char = client.services.get_characteristic(API_UUID)
-                except Exception:
-                    pass
-                try:
-                    scene_char = client.services.get_characteristic(SCENE_UUID)
-                except Exception:
-                    pass
-
-                if not api_char or not scene_char:
-                    diag_msg = (
-                        f"**Required characteristics not found!**\n\n"
-                        f"- API (`{API_UUID}`): {'FOUND' if api_char else 'MISSING'}\n"
-                        f"- Scene (`{SCENE_UUID}`): {'FOUND' if scene_char else 'MISSING'}\n\n"
-                        f"**Discovered services:**\n```\n{service_dump}\n```"
-                    )
-                    await self._notify_diagnostic(diag_msg)
-                    raise UpdateFailed(
-                        f"Required characteristics not found. "
-                        f"API ({API_UUID}): {'found' if api_char else 'MISSING'}, "
-                        f"Scene ({SCENE_UUID}): {'found' if scene_char else 'MISSING'}. "
-                        f"Services dump sent to persistent notification."
-                    )
-
                 if not self._scenes_loaded:
                     await self._enumerate_scenes(client)
                     self._scenes_loaded = True
