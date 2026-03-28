@@ -52,14 +52,14 @@ class LuvoCoordinator(DataUpdateCoordinator):
         self._scenes_loaded: bool = False
         self._lock = asyncio.Lock()
 
-        # Uplight state (HSB)
-        self._uplight_brightness: int = 100
-        self._uplight_hue: int = 0
-        self._uplight_saturation: int = 0
+        # Uplight state (HSB) — None means "unknown / scene-controlled"
+        self._uplight_brightness: int | None = None
+        self._uplight_hue: int | None = None
+        self._uplight_saturation: int | None = None
 
-        # Downlight state (color temp + brightness)
-        self._downlight_brightness: int = 100
-        self._downlight_color_temp: int = COLOR_TEMP_MIN_KELVIN
+        # Downlight state (color temp + brightness) — None means "unknown / scene-controlled"
+        self._downlight_brightness: int | None = None
+        self._downlight_color_temp: int | None = None
 
     def _get_ble_device(self):
         """Get the BLE device from HA's bluetooth integration."""
@@ -200,10 +200,27 @@ class LuvoCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Failed to send command to Luvo: %s", err)
                 raise
 
+    def _clear_intermediate_state(self) -> None:
+        """Clear locally-tracked uplight/downlight state after a scene change."""
+        self._uplight_hue = None
+        self._uplight_saturation = None
+        self._uplight_brightness = None
+        self._downlight_color_temp = None
+        self._downlight_brightness = None
+
     async def async_set_scene(self, scene_id: int) -> None:
-        """Set the active scene."""
+        """Set the active scene and clear intermediate state."""
         await self._send_command(CMD_SET_SCENE + bytes([scene_id]))
+        self._clear_intermediate_state()
         await self.async_request_refresh()
+
+    async def async_turn_on_lamp(self) -> None:
+        """Turn the lamp on with default scene without clearing intermediate state.
+
+        Used internally before sending intermediate uplight/downlight commands
+        so that state set right after turn-on is not wiped.
+        """
+        await self._send_command(CMD_SET_SCENE + bytes([SCENE_ON_DEFAULT]))
 
     async def async_set_brightness(self, brightness_pct: int) -> None:
         """Set overall brightness (0-100)."""
@@ -267,7 +284,7 @@ class LuvoCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_turn_on(self) -> None:
-        """Turn the lamp on with default scene."""
+        """Turn the lamp on with default scene (clears intermediate state)."""
         await self.async_set_scene(SCENE_ON_DEFAULT)
 
     async def async_turn_off(self) -> None:

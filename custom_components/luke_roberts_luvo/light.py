@@ -119,11 +119,27 @@ class LuvoUplight(CoordinatorEntity[LuvoCoordinator], LightEntity):
             bri_pct = round(kwargs[ATTR_BRIGHTNESS] * 100 / 255)
 
         if ATTR_HS_COLOR in kwargs or ATTR_BRIGHTNESS in kwargs:
+            # If lamp is off, turn on first before sending intermediate command
+            if not self.coordinator.data.get("is_on"):
+                await self.coordinator.async_turn_on_lamp()
             await self.coordinator.async_set_uplight(hue_raw, sat_raw, bri_pct)
             return
 
-        # Plain turn on with no args -> use default scene
-        await self.coordinator.async_turn_on()
+        # Plain turn on: restore last manual uplight state if available, else default scene
+        if (
+            self.coordinator._uplight_hue is not None
+            and self.coordinator._uplight_saturation is not None
+            and self.coordinator._uplight_brightness is not None
+        ):
+            if not self.coordinator.data.get("is_on"):
+                await self.coordinator.async_turn_on_lamp()
+            await self.coordinator.async_set_uplight(
+                self.coordinator._uplight_hue,
+                self.coordinator._uplight_saturation,
+                self.coordinator._uplight_brightness,
+            )
+        else:
+            await self.coordinator.async_turn_on()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off the lamp."""
@@ -174,11 +190,25 @@ class LuvoDownlight(CoordinatorEntity[LuvoCoordinator], LightEntity):
             bri_pct = round(kwargs[ATTR_BRIGHTNESS] * 100 / 255)
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs or ATTR_BRIGHTNESS in kwargs:
+            # If lamp is off, turn on first before sending intermediate command
+            if not self.coordinator.data.get("is_on"):
+                await self.coordinator.async_turn_on_lamp()
             await self.coordinator.async_set_downlight(kelvin, bri_pct)
             return
 
-        # Plain turn on -> use default scene
-        await self.coordinator.async_turn_on()
+        # Plain turn on: restore last manual downlight state if available, else default scene
+        if (
+            self.coordinator._downlight_color_temp is not None
+            and self.coordinator._downlight_brightness is not None
+        ):
+            if not self.coordinator.data.get("is_on"):
+                await self.coordinator.async_turn_on_lamp()
+            await self.coordinator.async_set_downlight(
+                self.coordinator._downlight_color_temp,
+                self.coordinator._downlight_brightness,
+            )
+        else:
+            await self.coordinator.async_turn_on()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off the lamp."""
