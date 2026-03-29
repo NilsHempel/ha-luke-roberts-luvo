@@ -74,15 +74,14 @@ class LuvoUplight(CoordinatorEntity[LuvoCoordinator], LightEntity):
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
-        """Return the uplight HS color."""
-        hue_raw = self.coordinator.data.get("uplight_hue", 0)
-        sat_raw = self.coordinator.data.get("uplight_saturation", 0)
-        # Convert from device range to HA range
+        """Return the uplight HS color, or None when scene-controlled."""
+        hue_raw = self.coordinator.data.get("uplight_hue")
+        sat_raw = self.coordinator.data.get("uplight_saturation")
+        if hue_raw is None or sat_raw is None:
+            return None
         # Device hue: 0-65535 -> HA hue: 0-360
         # Device sat: 0-255 -> HA sat: 0-100
-        ha_hue = hue_raw * 360 / 65535
-        ha_sat = sat_raw * 100 / 255
-        return (ha_hue, ha_sat)
+        return (hue_raw * 360 / 65535, sat_raw * 100 / 255)
 
     @property
     def effect_list(self) -> list[str]:
@@ -105,10 +104,10 @@ class LuvoUplight(CoordinatorEntity[LuvoCoordinator], LightEntity):
                 await self.coordinator.async_set_scene(scene_id)
                 return
 
-        # Gather current state for defaults
-        hue_raw = self.coordinator.data.get("uplight_hue", 0)
-        sat_raw = self.coordinator.data.get("uplight_saturation", 0)
-        bri_pct = self.coordinator.data.get("uplight_brightness", 100)
+        # Gather current state for defaults (use 0/100 if scene-controlled)
+        hue_raw = self.coordinator.data.get("uplight_hue") or 0
+        sat_raw = self.coordinator.data.get("uplight_saturation") or 0
+        bri_pct = self.coordinator.data.get("uplight_brightness") or 100
 
         if ATTR_HS_COLOR in kwargs:
             ha_hue, ha_sat = kwargs[ATTR_HS_COLOR]
@@ -169,8 +168,10 @@ class LuvoDownlight(CoordinatorEntity[LuvoCoordinator], LightEntity):
 
     @property
     def brightness(self) -> int | None:
-        """Return the downlight brightness (0-255)."""
-        pct = self.coordinator.data.get("downlight_brightness", 100)
+        """Return the downlight brightness (0-255), or None when scene-controlled."""
+        pct = self.coordinator.data.get("downlight_brightness")
+        if pct is None:
+            return None
         return round(pct * 255 / 100)
 
     @property
@@ -180,8 +181,9 @@ class LuvoDownlight(CoordinatorEntity[LuvoCoordinator], LightEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on the downlight."""
-        kelvin = self.coordinator.data.get("downlight_color_temp", COLOR_TEMP_MIN_KELVIN)
-        bri_pct = self.coordinator.data.get("downlight_brightness", 100)
+        # Use stored values or defaults if scene-controlled (None)
+        kelvin = self.coordinator.data.get("downlight_color_temp") or COLOR_TEMP_MIN_KELVIN
+        bri_pct = self.coordinator.data.get("downlight_brightness") or 100
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]

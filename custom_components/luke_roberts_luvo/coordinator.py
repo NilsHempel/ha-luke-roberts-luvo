@@ -219,8 +219,11 @@ class LuvoCoordinator(DataUpdateCoordinator):
 
         Used internally before sending intermediate uplight/downlight commands
         so that state set right after turn-on is not wiped.
+        Includes a short pause to let the lamp process the scene before the
+        intermediate command is sent.
         """
         await self._send_command(CMD_SET_SCENE + bytes([SCENE_ON_DEFAULT]))
+        await asyncio.sleep(0.5)
 
     async def async_set_brightness(self, brightness_pct: int) -> None:
         """Set overall brightness (0-100)."""
