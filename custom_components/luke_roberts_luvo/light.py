@@ -69,7 +69,9 @@ class LuvoUplight(CoordinatorEntity[LuvoCoordinator], LightEntity):
     @property
     def brightness(self) -> int | None:
         """Return the uplight brightness (0-255)."""
-        pct = self.coordinator.data.get("uplight_brightness", 100)
+        pct = self.coordinator.data.get("uplight_brightness")
+        if pct is None:
+            return None
         return round(pct * 255 / 100)
 
     @property

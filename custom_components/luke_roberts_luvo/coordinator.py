@@ -212,6 +212,10 @@ class LuvoCoordinator(DataUpdateCoordinator):
         """Set the active scene and clear intermediate state."""
         await self._send_command(CMD_SET_SCENE + bytes([scene_id]))
         self._clear_intermediate_state()
+        self._is_on = scene_id != SCENE_OFF
+        self._current_scene_id = scene_id
+        if self.data:
+            self.data["is_on"] = self._is_on
         await self.async_request_refresh()
 
     async def async_turn_on_lamp(self) -> None:
@@ -223,6 +227,9 @@ class LuvoCoordinator(DataUpdateCoordinator):
         intermediate command is sent.
         """
         await self._send_command(CMD_SET_SCENE + bytes([SCENE_ON_DEFAULT]))
+        self._is_on = True
+        if self.data:
+            self.data["is_on"] = True
         await asyncio.sleep(0.5)
 
     async def async_set_brightness(self, brightness_pct: int) -> None:
