@@ -10,7 +10,7 @@ from .config_flow import _friendly_name
 from .const import DOMAIN
 from .coordinator import LuvoCoordinator
 
-PLATFORMS = [Platform.LIGHT, Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [Platform.LIGHT, Platform.SELECT]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -30,9 +30,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    coordinator: LuvoCoordinator = hass.data[DOMAIN].get(entry.entry_id)
-    if coordinator:
-        coordinator.stop_adaptive_lighting()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
