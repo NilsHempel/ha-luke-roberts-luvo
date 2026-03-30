@@ -13,7 +13,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from homeassistant.core import callback
+from homeassistant.helpers.event import async_track_time_interval
+
 from .const import (
+    ADAPTIVE_UPDATE_INTERVAL,
     API_UUID,
     CMD_GET_SCENE,
     CMD_INTERMEDIATE,
@@ -23,6 +27,13 @@ from .const import (
     COLOR_TEMP_MIN_KELVIN,
     CONTENT_DOWNLIGHT,
     CONTENT_UPLIGHT,
+    DEFAULT_DAY_BRIGHTNESS,
+    DEFAULT_DAY_COLOR_TEMP,
+    DEFAULT_DAY_START_HOUR,
+    DEFAULT_EVENING_START_HOUR,
+    DEFAULT_NIGHT_BRIGHTNESS,
+    DEFAULT_NIGHT_COLOR_TEMP,
+    DEFAULT_NIGHT_HOUR,
     DOMAIN,
     DURATION_PERMANENT,
     SCENE_LIST_END,
@@ -60,6 +71,19 @@ class LuvoCoordinator(DataUpdateCoordinator):
         # Downlight state (color temp + brightness) — None means "unknown / scene-controlled"
         self._downlight_brightness: int | None = None
         self._downlight_color_temp: int | None = None
+
+        # Adaptive lighting state
+        self.adaptive_enabled: bool = False
+        self.adaptive_params: dict[str, float] = {
+            "day_start_hour": DEFAULT_DAY_START_HOUR,
+            "evening_start_hour": DEFAULT_EVENING_START_HOUR,
+            "night_hour": DEFAULT_NIGHT_HOUR,
+            "day_brightness": DEFAULT_DAY_BRIGHTNESS,
+            "night_brightness": DEFAULT_NIGHT_BRIGHTNESS,
+            "day_color_temp": DEFAULT_DAY_COLOR_TEMP,
+            "night_color_temp": DEFAULT_NIGHT_COLOR_TEMP,
+        }
+        self._adaptive_unsub: callback | None = None
 
     def _get_ble_device(self):
         """Get the BLE device from HA's bluetooth integration."""
@@ -300,3 +324,74 @@ class LuvoCoordinator(DataUpdateCoordinator):
     async def async_turn_off(self) -> None:
         """Turn the lamp off."""
         await self.async_set_scene(SCENE_OFF)
+
+    # ── Adaptive Lighting ───────────────────────────────────────────
+
+    def _compute_adaptive_values(self) -> tuple[int, int]:
+        """Compute target color temp (K) and brightness (%) for the current time.
+
+        Schedule:
+          day_start .. evening_start  → day values (constant)
+          evening_start .. night_hour → linear transition from day → night
+          night_hour .. day_start     → night values (constant)
+        """
+        from datetime import datetime
+
+        now = datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+
+        day_start = int(self.adaptive_params["day_start_hour"]) * 60
+        evening_start = int(self.adaptive_params["evening_start_hour"]) * 60
+        night = int(self.adaptive_params["night_hour"]) * 60
+
+        day_bri = int(self.adaptive_params["day_brightness"])
+        night_bri = int(self.adaptive_params["night_brightness"])
+        day_ct = int(self.adaptive_params["day_color_temp"])
+        night_ct = int(self.adaptive_params["night_color_temp"])
+
+        if day_start <= current_minutes < evening_start:
+            # Daytime: full brightness, cool white
+            return day_ct, day_bri
+        elif evening_start <= current_minutes < night:
+            # Evening transition: linear interpolation
+            total = night - evening_start
+            elapsed = current_minutes - evening_start
+            fraction = elapsed / total if total > 0 else 1.0
+            ct = round(day_ct + (night_ct - day_ct) * fraction)
+            bri = round(day_bri + (night_bri - day_bri) * fraction)
+            return ct, bri
+        else:
+            # Night / early morning: warm, dim
+            return night_ct, night_bri
+
+    def start_adaptive_lighting(self) -> None:
+        """Start the periodic adaptive lighting timer."""
+        self.stop_adaptive_lighting()
+        # Apply immediately, then schedule periodic updates
+        self.hass.async_create_task(self._async_apply_adaptive())
+        self._adaptive_unsub = async_track_time_interval(
+            self.hass,
+            self._async_adaptive_tick,
+            timedelta(seconds=ADAPTIVE_UPDATE_INTERVAL),
+        )
+
+    def stop_adaptive_lighting(self) -> None:
+        """Stop the periodic adaptive lighting timer."""
+        if self._adaptive_unsub is not None:
+            self._adaptive_unsub()
+            self._adaptive_unsub = None
+
+    async def _async_adaptive_tick(self, _now=None) -> None:
+        """Called periodically to apply adaptive lighting values."""
+        await self._async_apply_adaptive()
+
+    async def _async_apply_adaptive(self) -> None:
+        """Calculate and send adaptive lighting values to the lamp."""
+        if not self.adaptive_enabled or not self._is_on:
+            return
+        kelvin, brightness = self._compute_adaptive_values()
+        _LOGGER.debug(
+            "Adaptive lighting: setting downlight to %dK, %d%%",
+            kelvin, brightness,
+        )
+        await self.async_set_downlight(kelvin, brightness)
